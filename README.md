@@ -1,7 +1,7 @@
 # ordo
 
 A small Ruby library that tells you where any date falls in the traditional
-(English / 1928 American) **Book of Common Prayer** calendar — its season, the
+(English / 1928 American) Book of Common Prayer calendar — its season, the
 day's principal observance, and a few ways to render it as a timestamp.
 
 It runs two cycles in parallel, the way a real ordo does:
@@ -20,7 +20,7 @@ itself.
 
 ## Install
 
-There's no gem — it's a single file. Drop `ordo.rb` next to your code and:
+Drop `ordo.rb` next to your code and:
 
 ```ruby
 require_relative "ordo"
