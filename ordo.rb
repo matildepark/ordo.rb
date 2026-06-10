@@ -268,7 +268,12 @@ module Ordo
 
   def resolve(date, tradition: :traditional)
     temporal_obs = temporal(date, tradition: tradition)
-    candidates = ([temporal_obs] + sanctoral(date)) + transferred_into(date, tradition)
+
+    # Fixed feasts are not observed during Holy Week or Easter Week; they
+    # transfer out (and reappear via transferred_into on their new date).
+    own_sanctoral = in_holy_easter_week?(date) ? [] : sanctoral(date)
+
+    candidates = ([temporal_obs] + own_sanctoral) + transferred_into(date, tradition)
     candidates.sort_by! { |c| [rank_value(c[:rank]), c[:kind] == :temporal ? 0 : 1] }
 
     principal = candidates.first
@@ -301,19 +306,73 @@ module Ordo
       (principal[:kind] == :temporal && principal[:season] && SEASON_RANK[principal[:season]] == :privileged && principal[:sunday])
   end
 
+  # ---------------------------------------------------------------------
+  # Holy Week / Easter Week exclusion.
+  #
+  # Per the BCP calendar rubric, fixed feasts are NOT observed on any day
+  # of Holy Week or Easter Week. A major feast falling in that window is
+  # transferred to the week following the Second Sunday of Easter, the
+  # feasts taking successive open weekdays "in the order of their
+  # occurrence". The destination anchor is the Monday after the Second
+  # Sunday of Easter (Easter + 8); cascading feasts fill Easter+8, +9, …
+  #
+  # Only red-letter feasts that can ever reach the window are relevant:
+  # the Annunciation (Mar 25), St Mark (Apr 25) and SS Philip & James
+  # (May 1). Christmas/Epiphany/All Saints never collide with it.
+  # ---------------------------------------------------------------------
+
+  # The inclusive [Palm Sunday, Saturday in Easter Week] span for a date's
+  # governing Easter.
+  def holy_easter_window(date)
+    e = easter(governing_easter_year(date))
+    [(e - 7)..(e + 6), e]
+  end
+
+  def in_holy_easter_week?(date)
+    window, = holy_easter_window(date)
+    window.cover?(date)
+  end
+
+  # Feasts (with their source dates) displaced out of the window for the
+  # Easter governing `date`, in calendar order. Each is paired with the
+  # destination it cascades to, starting at Easter + 8.
+  def holy_week_transfers(date)
+    window, e = holy_easter_window(date)
+    dest0 = e + 8 # Monday after the Second Sunday of Easter
+    displaced = []
+    d = window.begin
+    while d <= window.end
+      sanctoral(d).each { |f| displaced << [d, f] }
+      d += 1
+    end
+    displaced.sort_by! { |src, _| src }
+    displaced.each_with_index.map { |(src, feast), i| [src, feast, dest0 + i] }
+  end
+
   # Find feasts displaced from earlier days that land on `date` (the next
   # day free of an equal-or-higher observance). Looks back up to 8 days.
+  # Holy-Week/Easter-Week transfers are handled separately and may reach
+  # much further forward.
   def transferred_into(date, tradition)
-    (1..8).each_with_object([]) do |back, acc|
+    acc = (1..8).each_with_object([]) do |back, a|
       src = date - back
       sanctoral(src).each do |feast|
         next unless would_transfer_from?(src, feast, tradition)
-        acc << feast.merge(transferred: true, from: src) if first_free_day(src, feast, tradition) == date
+        a << feast.merge(transferred: true, from: src) if first_free_day(src, feast, tradition) == date
       end
     end
+
+    # Holy Week / Easter Week feasts transferred to after Low Sunday.
+    holy_week_transfers(date).each do |src, feast, dest|
+      acc << feast.merge(transferred: true, from: src) if dest == date
+    end
+
+    acc
   end
 
   def would_transfer_from?(src, feast, tradition)
+    # In-window feasts are handled by holy_week_transfers, not here.
+    return false if in_holy_easter_week?(src)
     principal = temporal(src, tradition: tradition)
     # A feast only transfers if the temporal principal STRICTLY outranks it.
     # The Epiphany / Christmas appear in the temporal table as principal feasts
@@ -364,17 +423,6 @@ module Ordo
   # =====================================================================
   # TIMESTAMP FORMATTING
   # =====================================================================
-  #
-  # Ordo::Format.stamp(date, style: :feast)
-  #
-  #   :season   — terse, season only      -> "Eastertide, A.D. 2026"
-  #   :feast    — the day's observance     -> "Saint John, A.D. 2026"
-  #   :almanac  — feast over season + computus
-  #              -> "Saint John the Evangelist
-  #                  Christmastide · A.D. 2026 · g IV · DL d"
-  #   :colophon — old-book dateline        -> "on the feast of Saint Andrew,
-  #                                            in the year of grace 2026"
-  #
   module Format
     module_function
 
@@ -410,7 +458,6 @@ module Ordo
       "#{lede}#{comm_suffix}, in the year of grace #{date.year}"
     end
 
-    # Explicit :article wins; otherwise guess from a leading "The".
     def article_for(day)
       case day.principal[:article]
       when :the  then "the "
@@ -419,16 +466,12 @@ module Ordo
       end
     end
 
-    # Golden number: year's place in the 19-year Metonic cycle.
     def golden_number(year) = (year % 19) + 1
 
-    # Sunday Letter (dominical letter) for a Gregorian year.
     def dominical_letter(year)
-      # Letter of the first Sunday; leap years carry two — return the
-      # letter in force from March onward (the common convention for a stamp).
-      jan1 = Date.new(year, 1, 1).wday # 0 = Sunday
-      idx = (7 - jan1) % 7             # days until first Sunday
-      letters = %w[A G F E D C B]      # A if Jan 1 is Sunday, etc.
+      jan1 = Date.new(year, 1, 1).wday
+      idx = (7 - jan1) % 7
+      letters = %w[A G F E D C B]
       letters[(7 - idx) % 7]
     end
   end
@@ -451,7 +494,6 @@ class Date
     Ordo.season(self, tradition: tradition)
   end
 
-  # The day's principal observance, as a string — what you'd put in a timestamp.
   def liturgical_label(tradition: :traditional, with_commemorations: false)
     day = ordo(tradition: tradition)
     return day.label unless with_commemorations && day.commemorations.any?
@@ -460,12 +502,10 @@ class Date
     "#{day.label} (comm. #{comms})"
   end
 
-  # Names of any secondary observances on this day (may be empty).
   def liturgical_commemorations(tradition: :traditional)
     ordo(tradition: tradition).commemorations.map { _1[:name] }
   end
 
-  # A formatted timestamp. style: :season | :feast | :almanac | :colophon
   def liturgical_stamp(style: :feast, tradition: :traditional, with_commemorations: false)
     Ordo::Format.stamp(self, style: style, tradition: tradition, with_commemorations: with_commemorations)
   end
