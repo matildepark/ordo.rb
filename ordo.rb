@@ -31,6 +31,7 @@ module Ordo
     holy_day
     festival
     apostle
+    green_sunday
     lesser_festival
     commemoration
   ].freeze
@@ -115,8 +116,8 @@ module Ordo
     name = named_temporal(date, easter, s, tradition)
     privileged = SEASON_RANK[s] == :privileged && date.wday.zero?
 
-    { name: name, rank: privileged ? :festival : :commemoration,
-      kind: :temporal, season: s, sunday: date.wday.zero? }
+    rank = privileged ? :festival : (date.wday.zero? ? :green_sunday : :commemoration)
+    { name: name, rank: rank, kind: :temporal, season: s, sunday: date.wday.zero? }
   end
 
   WEEKDAY = %w[Sunday Monday Tuesday Wednesday Thursday Friday Saturday].freeze
@@ -268,7 +269,7 @@ module Ordo
   def resolve(date, tradition: :traditional)
     temporal_obs = temporal(date, tradition: tradition)
     candidates = ([temporal_obs] + sanctoral(date)) + transferred_into(date, tradition)
-    candidates.sort_by! { |c| rank_value(c[:rank]) }
+    candidates.sort_by! { |c| [rank_value(c[:rank]), c[:kind] == :temporal ? 0 : 1] }
 
     principal = candidates.first
     rest = candidates.drop(1)
@@ -277,6 +278,7 @@ module Ordo
     # higher feast is transferred out, not merely commemorated.
     commemorations = []
     rest.each do |c|
+      next if c[:kind] == :temporal && !c[:sunday] # ferial days have no proper to commemorate
       commemorations << c unless transfers_out?(c, principal, date, tradition)
     end
 
@@ -313,6 +315,11 @@ module Ordo
 
   def would_transfer_from?(src, feast, tradition)
     principal = temporal(src, tradition: tradition)
+    # A feast only transfers if the temporal principal STRICTLY outranks it.
+    # The Epiphany / Christmas appear in the temporal table as principal feasts
+    # on their own immovable dates; such a feast must not be "displaced" by the
+    # temporal echo of itself, so it stays put.
+    return false if rank_value(feast[:rank]) <= rank_value(principal[:rank])
     principal[:rank] == :principal_feast ||
       (SEASON_RANK[principal[:season]] == :privileged && principal[:sunday] &&
        rank_value(feast[:rank]) > rank_value(:festival).pred) # festival/apostle yields
@@ -371,24 +378,26 @@ module Ordo
   module Format
     module_function
 
-    def stamp(date, style: :feast, tradition: :traditional)
+    def stamp(date, style: :feast, tradition: :traditional, with_commemorations: false)
       day = Ordo.resolve(date, tradition: tradition)
+      cs = with_commemorations && day.commemorations.any? ?
+           " (comm. #{day.commemorations.map { _1[:name] }.join(", ")})" : ""
       case style
       when :season   then "#{Ordo::SEASON_NAME[day.season]}, A.D. #{date.year}"
-      when :feast    then "#{day.short_label}, A.D. #{date.year}"
-      when :almanac  then almanac(date, day)
-      when :colophon then colophon(date, day)
-      else day.short_label
+      when :feast    then "#{day.short_label}#{cs}, A.D. #{date.year}"
+      when :almanac  then almanac(date, day, cs)
+      when :colophon then colophon(date, day, cs)
+      else "#{day.short_label}#{cs}"
       end
     end
 
-    def almanac(date, day)
+    def almanac(date, day, comm_suffix = "")
       season = Ordo::SEASON_NAME[day.season]
       computus = "g #{Ordo.roman(golden_number(date.year))} · DL #{dominical_letter(date.year)}"
-      "#{day.label}\n#{season} · A.D. #{date.year} · #{computus}"
+      "#{day.label}#{comm_suffix}\n#{season} · A.D. #{date.year} · #{computus}"
     end
 
-    def colophon(date, day)
+    def colophon(date, day, comm_suffix = "")
       lede =
         if !day.sanctoral?
           "on #{day.short_label}"
@@ -398,7 +407,7 @@ module Ordo
         else
           "on the feast of #{day.short_label}"
         end
-      "#{lede}, in the year of grace #{date.year}"
+      "#{lede}#{comm_suffix}, in the year of grace #{date.year}"
     end
 
     # Explicit :article wins; otherwise guess from a leading "The".
@@ -443,12 +452,21 @@ class Date
   end
 
   # The day's principal observance, as a string — what you'd put in a timestamp.
-  def liturgical_label(tradition: :traditional)
-    ordo(tradition: tradition).label
+  def liturgical_label(tradition: :traditional, with_commemorations: false)
+    day = ordo(tradition: tradition)
+    return day.label unless with_commemorations && day.commemorations.any?
+
+    comms = day.commemorations.map { _1[:name] }.join(", ")
+    "#{day.label} (comm. #{comms})"
+  end
+
+  # Names of any secondary observances on this day (may be empty).
+  def liturgical_commemorations(tradition: :traditional)
+    ordo(tradition: tradition).commemorations.map { _1[:name] }
   end
 
   # A formatted timestamp. style: :season | :feast | :almanac | :colophon
-  def liturgical_stamp(style: :feast, tradition: :traditional)
-    Ordo::Format.stamp(self, style: style, tradition: tradition)
+  def liturgical_stamp(style: :feast, tradition: :traditional, with_commemorations: false)
+    Ordo::Format.stamp(self, style: style, tradition: tradition, with_commemorations: with_commemorations)
   end
 end

@@ -62,6 +62,27 @@ Date.new(2026, 5, 27).liturgical_label     #=> "Wednesday after Whitsunday"
 Weekdays get proper **ferial** names — "Wednesday after the First Sunday after
 Trinity" — rather than a bare season label.
 
+Pass `with_commemorations: true` to append any secondary observances:
+
+```ruby
+# 25 Jan: Conversion of Saint Paul (apostle) wins; Sunday is commemorated
+Date.new(2026, 1, 25).liturgical_label(with_commemorations: true)
+#=> "Conversion of Saint Paul (comm. Third Sunday after the Epiphany)"
+```
+
+### `liturgical_commemorations` → Array
+
+The names of any secondary observances on the day, in precedence order.
+Returns an empty array when there are none.
+
+```ruby
+Date.new(2026, 1, 25).liturgical_commemorations
+#=> ["Third Sunday after the Epiphany"]
+
+Date.new(2026, 1, 26).liturgical_commemorations
+#=> []
+```
+
 ### `liturgical_stamp(style:)` → String
 
 A formatted timestamp. Four styles:
@@ -85,6 +106,14 @@ d.liturgical_stamp(style: :almanac)
 
 `:colophon` is the old-book dateline; `:almanac` adds the computus data
 (golden number `g` and dominical letter `DL`).
+
+All styles accept `with_commemorations: true`, which appends `(comm. …)` after
+the observance name (no-op for `:season`, which shows no feast name):
+
+```ruby
+Date.new(2026, 1, 25).liturgical_stamp(style: :feast, with_commemorations: true)
+#=> "Conversion of St Paul (comm. Third Sunday after the Epiphany), A.D. 2026"
+```
 
 ### `ordo` → `Ordo::Day`
 
@@ -118,7 +147,10 @@ The fields:
 - `name:` — the full rubrical title (shown in `:almanac` and `ordo`)
 - `short:` — a terse form used in `:feast` and `:colophon` stamps (optional)
 - `rank:` — precedence; highest to lowest: `:principal_feast`, `:holy_day`,
-  `:festival`, `:apostle`, `:lesser_festival`, `:commemoration`
+  `:festival`, `:apostle`, `:green_sunday`, `:lesser_festival`, `:commemoration`.
+  `:green_sunday` is assigned internally to ordinary (non-privileged-season)
+  Sundays; it sits above `:lesser_festival` so a plain Sunday keeps the day over
+  a lesser saint, but any `:apostle`-rank saint or higher still wins.
 - `event:` — `true` for feasts that name an event rather than a person
   (the Annunciation, the Conversion of St Paul), which changes how the
   `:colophon` reads ("on the Annunciation" vs. "on the feast of Saint Andrew")
